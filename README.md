@@ -17,7 +17,7 @@ Este script va más allá de una grabación de macros simple. Resuelve problemas
 * **Herramienta:** Microsoft Excel (para consolidación y dashboard).
 
 ## ⚙️ Cómo usar este Demo
-1.  Descarga el archivo `Excel_Automatizado.xlsm`.
+1.  Descarga el archivo `Automatizacion_SENAMHI.xlsm`.
 2.  Asegúrate de tener instalado **Selenium Basic** y el **ChromeDriver** actualizado.
 3.  Abre el Excel y habilita las Macros.
 4.  Ejecuta la macro `Pregunta3_Extraccion_V15_Cloudflare`.
