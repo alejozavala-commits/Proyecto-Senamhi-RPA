@@ -27,4 +27,4 @@ Este script va más allá de una grabación de macros simple. Resuelve problemas
 > Debido a la arquitectura de seguridad de la web (Iframes + Anti-bot), el script utiliza tiempos de espera (`Waits`) conservadores para garantizar la estabilidad de la conexión.
 
 ---
-*Desarrollado por [Tu Nombre]*
+*Desarrollado por Alejandro Zavala*
