@@ -1,0 +1,354 @@
+' ==============================================================================
+' ALUMNO      : Alejandro Zavala
+' EVALUACION  : FINAL
+' DESCRIPCION : Automatización SENAMHI (Navegación, Lectura de DOM y Extracción)
+' ==============================================================================
+Option Explicit
+
+' Declaración global del driver para mantener la sesión abierta entre macros
+Private driver As New Selenium.ChromeDriver
+
+' ==============================================================================
+' INICIALIZACIÓN Y CARGA DEL MAPA
+' ==============================================================================
+Sub Pregunta1_A_AbrirMapa()
+    ' 1. Configuración de seguridad (Evitar errores SSL/Certificados)
+    driver.AddArgument "--ignore-certificate-errors"
+    driver.AddArgument "--ignore-ssl-errors"
+    
+    ' 2. Iniciar navegador
+    driver.Start
+    
+    ' 3. Navegación inicial
+    driver.Get "https://www.senamhi.gob.pe/?&p=estaciones"
+    driver.Wait 3000
+    
+    MsgBox "Mapa cargado. Objetos DOM listos.", vbInformation
+End Sub
+
+' ==============================================================================
+' NAVEGACIÓN ESPECÍFICA A LA REGIÓN PUNO
+' ==============================================================================
+Sub Pregunta1_B_IrAPuno()
+    Dim titulo As String
+    Dim botonPeru As Selenium.WebElement
+    Dim enlacePuno As Selenium.WebElement
+    Dim urlPuno As String
+    
+    ' 1. Verificación de seguridad: ¿El navegador está abierto?
+    On Error Resume Next
+    titulo = driver.Title
+    If Err.Number <> 0 Then
+        Err.Clear
+        Call Pregunta1_A_AbrirMapa
+    End If
+    On Error GoTo 0
+
+    ' 2. Maximizar para asegurar visibilidad de elementos
+    driver.Window.Maximize
+    driver.Wait 1000
+
+    ' 3. Interacción con el menú "Perú"
+    Set botonPeru = driver.FindElementByXPath("//a[contains(text(), 'Perú')]")
+    driver.ExecuteScript "arguments[0].click();", botonPeru ' Click forzado via JS
+    driver.Wait 2000
+    
+    ' 4. Obtener URL dinámica de Puno
+    Set enlacePuno = driver.FindElementByPartialLinkText("Puno")
+    urlPuno = enlacePuno.Attribute("href")
+    Debug.Print "URL Encontrada: " & urlPuno
+    
+    ' 5. Navegación directa al mapa regional
+    driver.Get urlPuno
+    driver.Wait 4000 ' Espera prudente para carga de tiles del mapa
+    
+    MsgBox "¡Listo! Visualizando región Puno.", vbInformation
+End Sub
+
+' ==============================================================================
+' EXTRACCIÓN DE NOMBRES
+' ==============================================================================
+Sub Pregunta2_A_NombresEstaciones()
+    Dim estaciones As Selenium.WebElements
+    Dim unaEstacion As Selenium.WebElement
+    Dim marcos As Selenium.WebElements
+    Dim nombreEstacion As String
+    Dim i As Integer, fila As Integer
+    
+    ' 1. Validación de sesión
+    If driver.Title = "" Then
+        MsgBox "El navegador parece cerrado. Ejecuta la parte 1.b primero.", vbCritical
+        Exit Sub
+    End If
+
+    ' 2. Preparación del entorno Excel
+    With Sheets("Hoja1")
+        .Cells.Clear
+        .Range("A1").Value = "Índice"
+        .Range("B1").Value = "Nombre de la Estación"
+        .Range("A1:B1").Font.Bold = True
+        .Columns("B").ColumnWidth = 30
+    End With
+    fila = 2
+    
+    ' 3. Gestión de IFRAMES (si existen)
+    Set marcos = driver.FindElementsByTag("iframe")
+    If marcos.Count > 0 Then
+        driver.SwitchToFrame marcos(1)
+        driver.Wait 500
+    End If
+    
+    ' 4. Localización de marcadores en el mapa
+    Set estaciones = driver.FindElementsByClass("leaflet-marker-icon")
+    If estaciones.Count = 0 Then
+        MsgBox "No se detectaron estaciones. Verifica la carga del mapa.", vbCritical
+        Exit Sub
+    End If
+    
+    ' 5. Bucle de Extracción Rápida (Lectura de Atributos)
+    For i = 1 To estaciones.Count
+        Set unaEstacion = estaciones(i)
+        
+        ' Estrategia A: Atributo 'title'
+        nombreEstacion = unaEstacion.Attribute("title")
+        
+        ' Estrategia B: Atributo 'alt'
+        If nombreEstacion = "" Then
+            nombreEstacion = unaEstacion.Attribute("alt")
+        End If
+        
+        ' Estrategia C: Tooltip (Hover) - Solo si falla lo anterior
+        If nombreEstacion = "" Then
+            driver.Actions.MoveToElement(unaEstacion).Perform
+            driver.Wait 100
+            On Error Resume Next
+            nombreEstacion = driver.FindElementByClass("leaflet-tooltip").Text
+            On Error GoTo 0
+        End If
+        
+        ' Fallback final
+        If nombreEstacion = "" Then nombreEstacion = "---"
+        
+        ' Volcado a Excel
+        Sheets("Hoja1").Cells(fila, 1).Value = i
+        Sheets("Hoja1").Cells(fila, 2).Value = nombreEstacion
+        fila = fila + 1
+        
+        ' Feedback en consola
+        If i Mod 10 = 0 Then Debug.Print "Procesando estación " & i
+    Next i
+    
+    MsgBox "¡Proceso terminado! Se extrajeron " & (fila - 2) & " estaciones.", vbInformation
+End Sub
+
+' ==============================================================================
+' EXTRACCIÓN HISTÓRICA (V15 - CLOUDFLARE SUPPORT)
+' ==============================================================================
+Sub Pregunta3_Extraccion_V15_Cloudflare()
+    ' --- Variables de Control y Excel ---
+    Dim i As Integer, filaExcel As Integer, c As Integer, contExito As Integer
+    Dim nombreEstacion As String
+    
+    ' --- Variables Selenium ---
+    Dim estaciones As Selenium.WebElements
+    Dim unaEstacion As Selenium.WebElement
+    Dim marcos As Selenium.WebElements
+    Dim popupLeaflet As Selenium.WebElement
+    Dim iframePopup As Selenium.WebElement
+    Dim btnTabla As Selenium.WebElement
+    Dim enlaces As Selenium.WebElements
+    Dim tablaHTML As Selenium.WebElement
+    Dim filasTabla As Selenium.WebElements
+    Dim celdas As Selenium.WebElements
+    Dim btnCerrar As Selenium.WebElements
+    
+    ' --- Variables Captcha ---
+    Dim cloudflareDetectado As Boolean
+    Dim inputCaptcha As Selenium.WebElement
+    Dim todosSpans As Selenium.WebElements
+    Dim unSpan As Selenium.WebElement
+    Dim btnVerificar As Selenium.WebElement
+    Dim codigoCaptcha As String, estilo As String
+    
+    ' 1. Verificación Inicial
+    If driver.Title = "" Then
+        MsgBox "Navegador cerrado. Ejecutar paso 1.b.", vbCritical
+        Exit Sub
+    End If
+    
+    ' 2. Setup Excel
+    Sheets("Hoja1").Select
+    Cells.ClearContents
+    Range("A1:G1").Value = Array("ID", "Nombre Estación", "Fecha", "Dato 1", "Dato 2", "Dato 3", "Dato 4")
+    Range("A1:G1").Font.Bold = True
+    Range("A1:G1").Interior.Color = vbYellow
+    filaExcel = 2
+    contExito = 0
+
+    ' 3. Entrar al contexto del Mapa
+    Set marcos = driver.FindElementsByTag("iframe")
+    If marcos.Count > 0 Then driver.SwitchToFrame marcos(1)
+
+    ' 4. Identificar Estaciones
+    Set estaciones = driver.FindElementsByClass("leaflet-marker-icon")
+    MsgBox "Iniciando extracción profunda en " & estaciones.Count & " estaciones.", vbInformation
+
+    ' ==========================================================================
+    ' BUCLE PRINCIPAL DE EXTRACCIÓN
+    ' ==========================================================================
+    For i = 1 To estaciones.Count
+        
+        If i > 5 Then Exit For ' Límite de prueba
+        
+        Set unaEstacion = estaciones(i)
+        nombreEstacion = unaEstacion.Attribute("title")
+        If nombreEstacion = "" Then nombreEstacion = "Estación " & i
+        
+        Debug.Print "=========================================="
+        Debug.Print "Procesando ID " & i & ": " & nombreEstacion
+        
+        On Error Resume Next
+        
+        ' --- PASO A: Abrir Popup ---
+        driver.ExecuteScript "arguments[0].click();", unaEstacion
+        driver.Wait 3000
+        
+        ' --- PASO B: Contexto Popup ---
+        Set popupLeaflet = driver.FindElementByClass("leaflet-popup-content")
+        If popupLeaflet Is Nothing Then GoTo CerrarYSiguiente
+        
+        Set iframePopup = popupLeaflet.FindElementByTag("iframe")
+        If iframePopup Is Nothing Then GoTo CerrarYSiguiente
+        
+        driver.SwitchToFrame iframePopup
+        driver.Wait 2000
+        
+        ' --- PASO C: Buscar Botón Tabla ---
+        Set btnTabla = Nothing
+        Set btnTabla = driver.FindElementById("tabla-tab")
+        
+        ' Búsqueda alternativa por texto si falla ID
+        If btnTabla Is Nothing Then
+            Set enlaces = driver.FindElementsByTag("a")
+            Dim j As Integer
+            For j = 1 To enlaces.Count
+                If InStr(enlaces(j).Text, "Tabla") > 0 Then
+                    Set btnTabla = enlaces(j)
+                    Exit For
+                End If
+            Next j
+        End If
+        
+        If btnTabla Is Nothing Then GoTo VolverAlMapaYCerrar
+        
+        ' --- PASO D: Activar Tabla ---
+        btnTabla.Click
+        driver.Wait 4000
+        
+        ' --- PASO E: GESTIÓN DE SEGURIDAD (CAPTCHAS) ---
+        
+        ' >> TIPO 1: Cloudflare
+        cloudflareDetectado = False
+        If driver.FindElementsByXPath("//*[contains(text(),'verificar') or contains(text(),'Verificar') or contains(text(),'robot')]").Count > 0 Then
+            cloudflareDetectado = True
+            MsgBox "CAPTCHA CLOUDFLARE DETECTADO" & vbCrLf & _
+                   "1. Resuélvelo manualmente en Chrome." & vbCrLf & _
+                   "2. Espera a ver la tabla." & vbCrLf & _
+                   "3. Pulsa Aceptar aquí.", vbExclamation
+            driver.Wait 2000
+        End If
+        
+        ' >> TIPO 2: Captcha Numérico Interno
+        If Not cloudflareDetectado Then
+            Set inputCaptcha = Nothing
+            Set inputCaptcha = driver.FindElementById("captchainput")
+            
+            If Not inputCaptcha Is Nothing Then
+                If inputCaptcha.IsDisplayed Then
+                    ' Extracción del código visual
+                    Set todosSpans = driver.FindElementsByTag("span")
+                    codigoCaptcha = ""
+                    
+                    For Each unSpan In todosSpans
+                        estilo = unSpan.Attribute("style")
+                        If InStr(estilo, "font-size") > 0 And (InStr(estilo, "large") > 0 Or InStr(estilo, "xx") > 0) Then
+                            codigoCaptcha = Trim(unSpan.Text)
+                            If Len(codigoCaptcha) > 0 Then Exit For
+                        End If
+                    Next
+                    
+                    ' Envío del código
+                    If Len(codigoCaptcha) > 0 Then
+                        Debug.Print "Captcha resuelto: [" & codigoCaptcha & "]"
+                        inputCaptcha.Clear
+                        inputCaptcha.SendKeys codigoCaptcha
+                        driver.Wait 500
+                        
+                        Set btnVerificar = driver.FindElementByXPath("//*[contains(text(),'Verificar')]")
+                        If Not btnVerificar Is Nothing Then
+                            btnVerificar.Click
+                            driver.Wait 3000
+                        End If
+                    End If
+                End If
+            End If
+        End If
+        
+        ' --- PASO F: SCRAPING DE LA TABLA ---
+        driver.Wait 3000
+        Set tablaHTML = Nothing
+        Set tablaHTML = driver.FindElementByCss("#tabla table")
+        If tablaHTML Is Nothing Then Set tablaHTML = driver.FindElementByCss("table")
+        
+        If tablaHTML Is Nothing Then
+            Cells(filaExcel, 1).Value = i
+            Cells(filaExcel, 2).Value = nombreEstacion & " (Sin tabla)"
+            filaExcel = filaExcel + 1
+            GoTo VolverAlMapaYCerrar
+        End If
+        
+        Set filasTabla = tablaHTML.FindElementsByTag("tr")
+        
+        If filasTabla.Count > 1 Then
+            Dim f As Integer
+            For f = 2 To filasTabla.Count
+                Set celdas = filasTabla(f).FindElementsByTag("td")
+                If celdas.Count > 0 Then
+                    Cells(filaExcel, 1).Value = i
+                    Cells(filaExcel, 2).Value = nombreEstacion
+                    
+                    Dim col As Integer
+                    For col = 1 To celdas.Count
+                        If col <= 5 Then Cells(filaExcel, 2 + col).Value = celdas(col).Text
+                    Next col
+                    filaExcel = filaExcel + 1
+                End If
+            Next f
+            contExito = contExito + 1
+            Debug.Print "--> OK: Datos extraídos."
+        Else
+            Cells(filaExcel, 1).Value = i
+            Cells(filaExcel, 2).Value = nombreEstacion & " (Vacía)"
+            filaExcel = filaExcel + 1
+        End If
+
+VolverAlMapaYCerrar:
+        ' Retorno al contexto principal
+        driver.SwitchToDefaultContent
+        Set marcos = driver.FindElementsByTag("iframe")
+        If marcos.Count > 0 Then driver.SwitchToFrame marcos(1)
+
+CerrarYSiguiente:
+        ' Cerrar popup para liberar mapa
+        Set btnCerrar = driver.FindElementsByClass("leaflet-popup-close-button")
+        If btnCerrar.Count > 0 Then
+            btnCerrar(1).Click
+            driver.Wait 1000
+        End If
+        
+        On Error GoTo 0
+    Next i
+
+    MsgBox "Proceso completado." & vbCrLf & "Estaciones exitosas: " & contExito, vbInformation
+End Sub
+
